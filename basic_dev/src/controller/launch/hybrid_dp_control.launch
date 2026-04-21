@@ -1,0 +1,61 @@
+<launch>
+    <node pkg="controller" type="pos_controller_node" name="pos_controller" output="screen">
+        <rosparam command="load" file="$(find controller)/config/pos_params.yaml" />
+    </node>
+
+    <node pkg="planner" type="hybrid_route_manager_node" name="hybrid_route_manager" output="screen">
+        <param name="csv_path" value="$(find sim_tools)/path/rule_based_strict_route_anchors.csv"/>
+        <param name="pose_topic" value="/airsim_node/drone_1/debug/pose_gt"/>
+        <param name="dp_cmd_topic" value="/dp_planner/position_cmd"/>
+        <param name="output_cmd_topic" value="/position_cmd"/>
+        <param name="goal_topic" value="/goal_pose"/>
+        <param name="goal_anchor_offset" value="2"/>
+        <param name="goal_reached_radius" value="8.0"/>
+        <param name="goal_republish_dist" value="0.5"/>
+        <param name="route_spacing" value="0.5"/>
+        <param name="track_look_ahead_distance" value="4.5"/>
+        <param name="track_cruise_speed" value="18.0"/>
+        <param name="track_slow_down_radius" value="18.0"/>
+        <param name="track_min_speed" value="8.5"/>
+        <param name="track_max_climb_speed" value="2.5"/>
+        <param name="track_z_speed_gain" value="1.2"/>
+    </node>
+
+    <node pkg="planner" type="stereo_depth_node" name="stereo_depth_node" output="screen">
+        <param name="left_topic" value="/airsim_node/drone_1/front_left/Scene"/>
+        <param name="right_topic" value="/airsim_node/drone_1/front_right/Scene"/>
+        <param name="left_info_topic" value="/airsim_node/drone_1/front_left/Scene/camera_info"/>
+        <param name="right_info_topic" value="/airsim_node/drone_1/front_right/Scene/camera_info"/>
+        <param name="lidar_topic" value="/airsim_node/drone_1/lidar"/>
+        <param name="depth_topic" value="/airsim_node/drone_1/front_stereo/DepthPerspective"/>
+        <param name="baseline_m" value="0.30"/>
+        <param name="camera_x" value="0.175"/>
+        <param name="camera_y" value="-0.15"/>
+        <param name="camera_z" value="0.0"/>
+        <param name="lidar_x" value="0.0"/>
+        <param name="lidar_y" value="0.0"/>
+        <param name="lidar_z" value="-0.05"/>
+        <param name="fallback_width" value="960"/>
+        <param name="fallback_height" value="720"/>
+        <param name="fallback_fov_deg" value="60.0"/>
+        <param name="max_sync_dt" value="0.12"/>
+        <param name="min_depth_m" value="0.3"/>
+        <param name="max_depth_m" value="24.0"/>
+        <param name="publish_rate" value="15.0"/>
+        <param name="block_size" value="5"/>
+        <param name="num_disparities" value="128"/>
+        <param name="min_disparity" value="0"/>
+        <param name="uniqueness_ratio" value="8"/>
+        <param name="speckle_window_size" value="50"/>
+        <param name="speckle_range" value="2"/>
+        <param name="disp12_max_diff" value="1"/>
+        <param name="pre_filter_cap" value="31"/>
+        <param name="lidar_patch_radius" value="2"/>
+        <param name="lidar_sync_dt" value="0.15"/>
+    </node>
+
+    <include file="$(find planner)/launch/dp_planner.launch">
+        <arg name="cmd_topic" value="/dp_planner/position_cmd"/>
+        <arg name="depth_topic" value="/airsim_node/drone_1/front_stereo/DepthPerspective"/>
+    </include>
+</launch>

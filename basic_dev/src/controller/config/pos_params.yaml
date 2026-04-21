@@ -1,0 +1,39 @@
+# 水平控制 (XY轴)
+kp_xy: 2.0
+ki_xy: 0.0
+kd_xy: 0.05
+max_vel_xy: 20.0
+max_integral_xy: 1.0
+
+# 高度控制 (Z轴)
+kp_z: 3.2
+ki_z: 0.0
+kd_z: 0.15
+max_vel_z: 5.0
+max_integral_z: 0.8
+
+# 控制与接口参数
+ctrl_rate_hz: 50.0
+cmd_timeout: 0.3
+xy_accel_limit: 8
+max_yaw_rate: 2.5
+rotate_max_yaw_rate: 0.35
+yaw_kp_track: 2.5
+yaw_kp_rotate: 0.45
+yaw_rate_cmd_scale: 57.29577951308232
+startup_profile_hold_dist: 0.0
+startup_profile_blend_dist: 5.0
+
+# 起步阶段控制器小参数，飞出一段距离后按距离平滑恢复上面的正常参数
+startup_kp_xy: 1.8
+startup_kd_xy: 0.05
+startup_max_vel_xy: 12.0
+startup_kp_z: 1.0
+startup_kd_z: 0.12
+startup_max_vel_z: 2.5
+
+# 坐标系约定
+# PositionCommand 和 /uav/state/pose 默认都按仿真 NED 处理；
+# 控制器内部统一转成 z-up 后，再发送给 VelCmd.vz（上为正）。
+position_cmd_z_sign: -1.0 
+pose_z_sign: -1.0

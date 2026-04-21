@@ -1,0 +1,62 @@
+<launch>
+    <node pkg="sim_tools" type="path_loader.py" name="path_loader" output="screen">
+        <param name="csv_path" value="../path/1-3.csv"/>
+        <param name="path_mode" value="linear"/>
+        <param name="smoothing" value="0.30"/><!-- 0.18 -->
+        <param name="num_points" value="15000"/><!-- 1500 -->
+        <param name="min_spacing" value="0.05"/><!-- 0.05 -->
+        <param name="resample_spacing" value="0.20"/><!-- 0.20 -->
+        <param name="min_curve_spacing" value="0.10"/><!-- 0.10 -->
+        <param name="curvature_gain" value="3.0"/><!-- 6.0 -->
+        <param name="spike_jump" value="4.0"/><!-- 4.0 -->
+        <param name="reconnect_dist" value="1.0"/><!-- 1.0 -->
+        <param name="corner_gain" value="1.0"/><!-- 1.0 -->
+    </node>
+    <node pkg="controller" type="pos_controller_node" name="pos_controller" output="screen">
+        <rosparam command="load" file="$(find controller)/config/pos_params.yaml" />
+    </node>
+
+    <node pkg="planner" type="path_follower" name="path_follower" output="screen">
+        <param name="look_ahead_distance" value="4.0"/><!-- 4.0 -->
+        <param name="min_dist_threshold" value="0.15"/>
+        <param name="cruise_speed" value="4.2"/><!-- 4.2 -->
+        <param name="slow_down_radius" value="1.5"/>
+        <param name="max_climb_speed" value="3.5"/><!-- 3.5 -->
+        <param name="z_feedforward_gain" value="3.5"/><!-- 2.8 -->
+        <param name="forward_search_window" value="60"/>
+        <param name="turn_slow_angle_deg" value="20.0"/>
+        <param name="turn_sharp_angle_deg" value="55.0"/>
+        <param name="turn_min_speed_ratio" value="0.40"/>
+        <param name="turn_min_look_ahead" value="1.2"/>
+        <param name="enable_turnaround_mode" value="true"/>
+        <param name="turnaround_angle_deg" value="90.0"/>
+        <param name="turnaround_search_ahead" value="160"/>
+        <!-- 预测开始掉头距离 -->
+        <param name="turnaround_activate_dist" value="55.0"/>
+        <param name="turnaround_look_ahead" value="2.0"/>
+        <!-- 压制速度 -->
+        <param name="turnaround_speed" value="15.0"/>
+        <param name="turnaround_exit_points" value="50"/>
+        <!-- 使用固定掉头点，而不是只靠局部角度识别 -->
+        <param name="enable_fixed_turnaround_points" value="false"/>
+        <!-- 与固定掉头触发点的几何距离阈值 -->
+        <param name="fixed_turnaround_activate_dist" value="5.0"/>
+        <!-- 固定掉头点沿路径提前触发的索引点数 -->
+        <param name="fixed_turnaround_trigger_ahead_points" value="80"/>
+        <!-- 掉头及恢复段 z 目标每周期最大变化量 -->
+        <param name="turnaround_z_step_limit" value="0.03"/>
+        <!-- 掉头完成后先转正机头，再恢复前进 -->
+        <param name="enable_post_turn_yaw_align" value="true"/>
+        <!-- 机头与前方目标点偏差小于该角度后放行 -->
+        <param name="post_turn_yaw_align_deg" value="12.0"/>
+        <!-- 刚接管时从低速缓升到巡航速度 -->
+        <param name="startup_ramp_duration" value="4.0"/>
+        <param name="startup_speed_ratio" value="0.18"/>
+        <!-- 刚接管时先盯近处路径点，随后恢复正常预瞄 -->
+        <param name="startup_look_ahead_ratio" value="0.12"/>
+        <param name="startup_min_look_ahead" value="0.5"/>
+        <!-- 掉头后第一个目标点至少前跳这么多个路径点 -->
+        <param name="post_turn_target_ahead_points" value="12"/>
+    </node>
+
+</launch>
