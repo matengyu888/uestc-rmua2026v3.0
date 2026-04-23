@@ -9,9 +9,17 @@
         <param name="goal_topic" value="/goal_pose"/>
         <param name="cmd_topic" value="$(arg cmd_topic)"/>
         <param name="model_path" value="$(find planner)/models/dp_planner/3-19.pth"/>
-        <param name="max_speed" value="10.5"/>
+        <param name="max_speed" value="16.0"/>
         <param name="margin" value="0.8"/>
         <param name="thr_est_error" value="1.0"/>
         <param name="goal_reached_dist" value="0.4"/>
+        <param name="cmd_pos_horizon_sec" value="1.6"/>
+        <param name="cmd_pos_horizon_z_sec" value="0.8"/>
+        <param name="max_speed_z" value="2.5"/>
+        <param name="turn_slowdown_start_deg" value="70.0"/>
+        <param name="turn_reverse_trigger_deg" value="135.0"/>
+        <param name="turn_min_speed_scale" value="0.45"/>
+        <param name="reverse_turn_speed_scale" value="0.60"/>
+        <param name="yaw_slew_rate" value="0.55"/>
     </node>
 </launch>

@@ -56,7 +56,7 @@ add_dependencies(stereo_depth_node ${${PROJECT_NAME}_EXPORTED_TARGETS} ${catkin_
 target_link_libraries(stereo_depth_node
   ${catkin_LIBRARIES} ${OpenCV_LIBRARIES})
 
-install(DIRECTORY launch models
+install(DIRECTORY launch models rviz
   DESTINATION ${CATKIN_PACKAGE_SHARE_DESTINATION}
 )
 
@@ -66,5 +66,6 @@ install(PROGRAMS
   scripts/local_goal_publisher.py
   scripts/model.py
   scripts/planner_switcher.py
+  scripts/rviz_bridge.py
   DESTINATION ${CATKIN_PACKAGE_BIN_DESTINATION}
 )

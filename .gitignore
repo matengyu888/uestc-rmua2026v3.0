@@ -1,0 +1,32 @@
+# Build outputs
+build/
+devel/
+install/
+basic_dev/build/
+basic_dev/devel/
+basic_dev/install/
+
+# Python cache files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Logs and runtime outputs
+logs/
+*.log
+*.bag
+
+# Local simulator / third-party source drops
+g2o/
+simulator12.0.0.3/
+
+# Generated submission archives
+*.tar
+*.tar.gz
+*.tgz
+*.zip
+*.sha256
+
+# Local editor and command scratch files
+.vscode/
+cmd.txt

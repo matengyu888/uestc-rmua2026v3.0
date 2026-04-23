@@ -1,0 +1,22 @@
+<launch>
+    <arg name="pose_topic" default="/airsim_node/drone_1/debug/pose_gt"/>
+    <arg name="cmd_topic" default="/position_cmd"/>
+    <arg name="depth_topic" default="/airsim_node/drone_1/front_stereo/DepthPerspective"/>
+    <arg name="left_info_topic" default="/airsim_node/drone_1/front_left/Scene/camera_info"/>
+
+    <node pkg="planner" type="rviz_bridge.py" name="dp_rviz_bridge" output="screen">
+        <param name="pose_topic" value="$(arg pose_topic)"/>
+        <param name="cmd_topic" value="$(arg cmd_topic)"/>
+        <param name="depth_topic" value="$(arg depth_topic)"/>
+        <param name="left_info_topic" value="$(arg left_info_topic)"/>
+        <param name="world_frame" value="world"/>
+        <param name="base_frame" value="uav_base_link"/>
+        <param name="depth_frame" value="uav_base_link"/>
+        <param name="depth_sample_step" value="6"/>
+        <param name="max_depth_m" value="18.0"/>
+        <param name="depth_viz_max_m" value="8.0"/>
+        <param name="depth_viz_gamma" value="0.7"/>
+    </node>
+
+    <node pkg="rviz" type="rviz" name="dp_rviz" args="-d $(find planner)/rviz/dp_debug.rviz" output="screen"/>
+</launch>

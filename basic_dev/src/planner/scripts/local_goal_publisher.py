@@ -27,7 +27,7 @@ class LocalGoalPublisher:
 
         rospy.Subscriber(self.path_topic, Path, self.path_cb, queue_size=1)
         rospy.Subscriber(self.pose_topic, PoseStamped, self.pose_cb, queue_size=1)
-        self.goal_pub = rospy.Publisher(self.goal_topic, PoseStamped, queue_size=1)
+        self.goal_pub = rospy.Publisher(self.goal_topic, PoseStamped, queue_size=1, latch=True)
 
         period = 1.0 / max(self.publish_rate, 1.0)
         self.timer = rospy.Timer(rospy.Duration(period), self.publish_goal)

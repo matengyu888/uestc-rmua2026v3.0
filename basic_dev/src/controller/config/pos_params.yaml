@@ -1,8 +1,8 @@
 # 水平控制 (XY轴)
-kp_xy: 2.0
+kp_xy: 2.8
 ki_xy: 0.0
-kd_xy: 0.05
-max_vel_xy: 20.0
+kd_xy: 0.08
+max_vel_xy: 24.0
 max_integral_xy: 1.0
 
 # 高度控制 (Z轴)
@@ -22,15 +22,15 @@ yaw_kp_track: 2.5
 yaw_kp_rotate: 0.45
 yaw_rate_cmd_scale: 57.29577951308232
 startup_profile_hold_dist: 0.0
-startup_profile_blend_dist: 5.0
+startup_profile_blend_dist: 1.5
 
 # 起步阶段控制器小参数，飞出一段距离后按距离平滑恢复上面的正常参数
-startup_kp_xy: 1.8
-startup_kd_xy: 0.05
-startup_max_vel_xy: 12.0
-startup_kp_z: 1.0
+startup_kp_xy: 2.6
+startup_kd_xy: 0.08
+startup_max_vel_xy: 18.0
+startup_kp_z: 0.5
 startup_kd_z: 0.12
-startup_max_vel_z: 2.5
+startup_max_vel_z: 1.0
 
 # 坐标系约定
 # PositionCommand 和 /uav/state/pose 默认都按仿真 NED 处理；

@@ -1,6 +1,5 @@
 #include <geometry_msgs/PoseStamped.h>
 #include <nav_msgs/Path.h>
-#include <quadrotor_msgs/PositionCommand.h>
 #include <ros/ros.h>
 #include <std_msgs/String.h>
 
@@ -25,12 +24,6 @@ struct RoutePoint {
   double global_order = 0.0;
 };
 
-double normalizeAngle(double angle) {
-  while (angle > M_PI) angle -= 2.0 * M_PI;
-  while (angle < -M_PI) angle += 2.0 * M_PI;
-  return angle;
-}
-
 double spatialDistance(const RoutePoint& a, const RoutePoint& b) {
   const double dx = a.x - b.x;
   const double dy = a.y - b.y;
@@ -42,14 +35,6 @@ double horizontalDistance(const RoutePoint& a, const RoutePoint& b) {
   const double dx = a.x - b.x;
   const double dy = a.y - b.y;
   return std::sqrt(dx * dx + dy * dy);
-}
-
-RoutePoint addScaled(const RoutePoint& point, double dx, double dy, double dz, double scale) {
-  RoutePoint out = point;
-  out.x += dx * scale;
-  out.y += dy * scale;
-  out.z += dz * scale;
-  return out;
 }
 
 std::vector<std::string> splitCsvLine(const std::string& line) {
@@ -95,21 +80,15 @@ geometry_msgs::Quaternion yawToQuaternion(double yaw) {
 
 class HybridRouteManager {
  public:
-  static constexpr uint8_t FLAG_TRACK = 0;
-  static constexpr uint8_t FLAG_BRAKE_FOR_TURN = 101;
-  static constexpr uint8_t FLAG_ROTATE_FOR_TURN = 102;
-
   HybridRouteManager() : nh_(), pnh_("~") {
     loadParams();
     loadRouteFromCsv();
     densifyRoute();
+    buildSegments();
     buildPathMessages();
 
     pose_sub_ = nh_.subscribe(pose_topic_, 1, &HybridRouteManager::poseCb, this);
-    dp_cmd_sub_ = nh_.subscribe(dp_cmd_topic_, 1, &HybridRouteManager::dpCmdCb, this);
-
-    cmd_pub_ = nh_.advertise<quadrotor_msgs::PositionCommand>(output_cmd_topic_, 1);
-    goal_pub_ = nh_.advertise<geometry_msgs::PoseStamped>(goal_topic_, 1);
+    goal_pub_ = nh_.advertise<geometry_msgs::PoseStamped>(goal_topic_, 1, true);
     state_pub_ = nh_.advertise<std_msgs::String>(state_topic_, 1, true);
     dense_path_pub_ = nh_.advertise<nav_msgs::Path>(dense_path_topic_, 1, true);
     anchor_path_pub_ = nh_.advertise<nav_msgs::Path>(anchor_path_topic_, 1, true);
@@ -127,14 +106,19 @@ class HybridRouteManager {
   }
 
  private:
+  struct RouteSegment {
+    int raw_start_idx = 0;
+    int raw_end_idx = 0;
+    int dense_start_idx = 0;
+    int dense_end_idx = 0;
+  };
+
   enum class State {
-    kTrackRoute = 0,
+    kDpPlanner = 0,
   };
 
   void loadParams() {
     pose_topic_ = pnh_.param<std::string>("pose_topic", "/airsim_node/drone_1/debug/pose_gt");
-    dp_cmd_topic_ = pnh_.param<std::string>("dp_cmd_topic", "/dp_planner/position_cmd");
-    output_cmd_topic_ = pnh_.param<std::string>("output_cmd_topic", "/position_cmd");
     goal_topic_ = pnh_.param<std::string>("goal_topic", "/goal_pose");
     state_topic_ = pnh_.param<std::string>("state_topic", "/hybrid_route/state");
     dense_path_topic_ = pnh_.param<std::string>("dense_path_topic", "/hybrid_route/reference_path");
@@ -149,17 +133,19 @@ class HybridRouteManager {
     raw_progress_search_window_ = pnh_.param("raw_progress_search_window", 36);
     progress_z_weight_ = pnh_.param("progress_z_weight", 0.20);
 
-    track_look_ahead_distance_ = pnh_.param("track_look_ahead_distance", 4.5);
-    track_cruise_speed_ = pnh_.param("track_cruise_speed", 4.2);
-    track_slow_down_radius_ = pnh_.param("track_slow_down_radius", 10.0);
-    track_min_speed_ = pnh_.param("track_min_speed", 1.0);
-    track_min_dist_threshold_ = pnh_.param("track_min_dist_threshold", 0.15);
-    track_max_climb_speed_ = pnh_.param("track_max_climb_speed", 3.0);
-    track_z_speed_gain_ = pnh_.param("track_z_speed_gain", 2.0);
     track_publish_rate_ = pnh_.param("track_publish_rate", 50.0);
     goal_anchor_offset_ = pnh_.param("goal_anchor_offset", 1);
     goal_republish_dist_ = pnh_.param("goal_republish_dist", 0.5);
     goal_reached_radius_ = pnh_.param("goal_reached_radius", 6.0);
+    dp_goal_corridor_lookahead_ = pnh_.param("dp_goal_corridor_lookahead", 8.0);
+    gate_slowdown_distance_ = pnh_.param("gate_slowdown_distance", 5.0);
+    segment_entry_hold_distance_ = pnh_.param("segment_entry_hold_distance", 4.0);
+    segment_entry_activation_radius_ = pnh_.param("segment_entry_activation_radius", 12.0);
+    segment_entry_goal_lookahead_ = pnh_.param("segment_entry_goal_lookahead", 2.0);
+    duplicate_gate_threshold_ = pnh_.param("duplicate_gate_threshold", 0.30);
+    segment_switch_radius_ = pnh_.param("segment_switch_radius", 2.0);
+    gate_pass_margin_ = pnh_.param("gate_pass_margin", 0.3);
+    gate_pass_activation_radius_ = pnh_.param("gate_pass_activation_radius", 12.0);
   }
 
   void loadRouteFromCsv() {
@@ -271,6 +257,50 @@ class HybridRouteManager {
     }
   }
 
+  void buildSegments() {
+    segments_.clear();
+    if (raw_points_.empty()) {
+      return;
+    }
+
+    int seg_start = 0;
+    for (int i = 0; i + 1 < static_cast<int>(raw_points_.size()); ++i) {
+      if (spatialDistance(raw_points_[i], raw_points_[i + 1]) > duplicate_gate_threshold_) {
+        continue;
+      }
+
+      RouteSegment seg;
+      seg.raw_start_idx = seg_start;
+      seg.raw_end_idx = i;
+      seg.dense_start_idx = raw_toDenseClamped(seg.raw_start_idx);
+      seg.dense_end_idx = raw_toDenseClamped(seg.raw_end_idx);
+      segments_.push_back(seg);
+      seg_start = i + 1;
+    }
+
+    RouteSegment final_seg;
+    final_seg.raw_start_idx = seg_start;
+    final_seg.raw_end_idx = static_cast<int>(raw_points_.size()) - 1;
+    final_seg.dense_start_idx = raw_toDenseClamped(final_seg.raw_start_idx);
+    final_seg.dense_end_idx = raw_toDenseClamped(final_seg.raw_end_idx);
+    segments_.push_back(final_seg);
+
+    active_segment_idx_ = 0;
+    entry_gate_released_ = false;
+  }
+
+  int raw_toDenseClamped(int raw_idx) const {
+    if (raw_to_dense_idx_.empty()) {
+      return 0;
+    }
+    raw_idx = std::max(0, std::min(raw_idx, static_cast<int>(raw_to_dense_idx_.size()) - 1));
+    return raw_to_dense_idx_[raw_idx];
+  }
+
+  const RouteSegment& activeSegment() const {
+    return segments_[std::max(0, std::min(active_segment_idx_, static_cast<int>(segments_.size()) - 1))];
+  }
+
   void buildPathMessages() {
     dense_path_msg_.header.frame_id = "world";
     for (const RoutePoint& point : dense_points_) {
@@ -297,9 +327,10 @@ class HybridRouteManager {
 
   std::string stateToString(State state) const {
     switch (state) {
-      case State::kTrackRoute:
+      case State::kDpPlanner:
+        return "DP_PLANNER";
       default:
-        return "TRACK_ROUTE";
+        return "DP_PLANNER";
     }
   }
 
@@ -313,42 +344,68 @@ class HybridRouteManager {
   }
 
   void poseCb(const geometry_msgs::PoseStamped::ConstPtr& msg) {
-    const ros::Time now_stamp = msg->header.stamp.isZero() ? ros::Time::now() : msg->header.stamp;
-    if (has_pose_) {
-      const double dt = std::max((now_stamp - last_pose_stamp_).toSec(), 1e-3);
-      const double dx = msg->pose.position.x - current_pose_.pose.position.x;
-      const double dy = msg->pose.position.y - current_pose_.pose.position.y;
-      current_speed_xy_ = std::sqrt(dx * dx + dy * dy) / dt;
-    }
     current_pose_ = *msg;
     has_pose_ = true;
-    last_pose_stamp_ = now_stamp;
-
-    const auto& q = msg->pose.orientation;
-    const double siny_cosp = 2.0 * (q.w * q.z + q.x * q.y);
-    const double cosy_cosp = 1.0 - 2.0 * (q.y * q.y + q.z * q.z);
-    current_yaw_ = normalizeAngle(std::atan2(siny_cosp, cosy_cosp));
+    if (!boot_goal_published_) {
+      publishGoalIfPossible(true, "boot");
+    }
   }
 
-  void dpCmdCb(const quadrotor_msgs::PositionCommand::ConstPtr& msg) {
-    latest_dp_cmd_ = *msg;
-    has_dp_cmd_ = true;
+  bool publishGoalIfPossible(bool force_publish, const char* reason) {
+    const int dense_idx = findNearestDenseIdx();
+    const int raw_idx = findNearestRawIdx();
+    if (dense_idx < 0 || raw_idx < 0) {
+      ROS_WARN_THROTTLE(1.0, "HybridRouteManager cannot build goal yet. reason=%s has_pose=%s dense_points=%zu raw_points=%zu",
+                        reason, has_pose_ ? "true" : "false", dense_points_.size(), raw_points_.size());
+      return false;
+    }
+
+    maybeAdvanceSegment();
+
+    const int segment_dense_idx = findNearestDenseIdx();
+    const int segment_raw_idx = findNearestRawIdx();
+    if (segment_dense_idx < 0 || segment_raw_idx < 0) {
+      ROS_WARN_THROTTLE(1.0, "HybridRouteManager segment-local goal lookup failed. reason=%s", reason);
+      return false;
+    }
+
+    const geometry_msgs::PoseStamped goal = buildGoalPose(segment_raw_idx);
+    const bool goal_published = force_publish || shouldPublishGoal(goal);
+    if (goal_published) {
+      goal_pub_.publish(goal);
+      last_goal_ = goal;
+      has_last_goal_ = true;
+      last_goal_publish_time_ = ros::Time::now();
+      boot_goal_published_ = true;
+    }
+
+    const RouteSegment& segment = activeSegment();
+    ROS_INFO_THROTTLE(0.5,
+                      "HybridRoute GOAL seg=%d/%zu raw=%d dense=%d range_raw=[%d,%d] reason=%s goal_pub=%s goal=(%.2f,%.2f,%.2f)",
+                      active_segment_idx_ + 1, segments_.size(),
+                      segment_raw_idx, segment_dense_idx,
+                      segment.raw_start_idx, segment.raw_end_idx,
+                      reason,
+                      goal_published ? "YES" : "NO",
+                      goal.pose.position.x, goal.pose.position.y, goal.pose.position.z);
+    return goal_published;
   }
 
   int findNearestDenseIdx() {
-    if (!has_pose_ || dense_points_.empty()) {
+    if (!has_pose_ || dense_points_.empty() || segments_.empty()) {
       return -1;
     }
 
     const double pose_x = current_pose_.pose.position.x;
     const double pose_y = current_pose_.pose.position.y;
     const double pose_z = current_pose_.pose.position.z;
+    const RouteSegment& segment = activeSegment();
 
-    int start = 0;
-    int end = static_cast<int>(dense_points_.size()) - 1;
+    int start = segment.dense_start_idx;
+    int end = segment.dense_end_idx;
     if (dense_progress_idx_ >= 0) {
-      start = std::max(0, dense_progress_idx_);
-      end = std::min(static_cast<int>(dense_points_.size()) - 1, dense_progress_idx_ + dense_progress_search_window_);
+      start = std::max(segment.dense_start_idx, dense_progress_idx_);
+      end = std::min(segment.dense_end_idx, dense_progress_idx_ + dense_progress_search_window_);
     }
 
     int best_idx = start;
@@ -370,19 +427,20 @@ class HybridRouteManager {
   }
 
   int findNearestRawIdx() {
-    if (!has_pose_ || raw_points_.empty()) {
+    if (!has_pose_ || raw_points_.empty() || segments_.empty()) {
       return -1;
     }
 
     const double pose_x = current_pose_.pose.position.x;
     const double pose_y = current_pose_.pose.position.y;
     const double pose_z = current_pose_.pose.position.z;
+    const RouteSegment& segment = activeSegment();
 
-    int start = 0;
-    int end = static_cast<int>(raw_points_.size()) - 1;
+    int start = segment.raw_start_idx;
+    int end = segment.raw_end_idx;
     if (raw_progress_idx_ >= 0) {
-      start = std::max(0, raw_progress_idx_);
-      end = std::min(static_cast<int>(raw_points_.size()) - 1, raw_progress_idx_ + raw_progress_search_window_);
+      start = std::max(segment.raw_start_idx, raw_progress_idx_);
+      end = std::min(segment.raw_end_idx, raw_progress_idx_ + raw_progress_search_window_);
     }
 
     int best_idx = start;
@@ -404,9 +462,14 @@ class HybridRouteManager {
   }
 
   int advanceDenseIdxByDistance(int start_idx, double lookahead) const {
+    if (segments_.empty()) {
+      return start_idx;
+    }
+    const RouteSegment& segment = activeSegment();
+    start_idx = std::max(segment.dense_start_idx, std::min(start_idx, segment.dense_end_idx));
     int target_idx = start_idx;
     double accum = 0.0;
-    for (int i = start_idx; i + 1 < static_cast<int>(dense_points_.size()); ++i) {
+    for (int i = start_idx; i + 1 <= segment.dense_end_idx; ++i) {
       const RoutePoint& p0 = dense_points_[i];
       const RoutePoint& p1 = dense_points_[i + 1];
       accum += horizontalDistance(p0, p1);
@@ -419,83 +482,70 @@ class HybridRouteManager {
     return target_idx;
   }
 
-  RoutePoint currentRoutePoint() const {
+  geometry_msgs::PoseStamped buildGoalPose(int raw_idx) {
+    RoutePoint goal;
+    RoutePoint heading_ref;
+    const RouteSegment& segment = activeSegment();
+    bool use_gate_approach_heading = false;
+    bool hold_segment_entry = false;
+
     RoutePoint curr;
     curr.x = current_pose_.pose.position.x;
     curr.y = current_pose_.pose.position.y;
     curr.z = current_pose_.pose.position.z;
-    return curr;
-  }
 
+    if (active_segment_idx_ > 0 && segment.raw_end_idx > segment.raw_start_idx) {
+      const RoutePoint& entry_gate = raw_points_[segment.raw_start_idx];
+      const RoutePoint& next_ref = raw_points_[segment.raw_start_idx + 1];
+      const double dir_x = next_ref.x - entry_gate.x;
+      const double dir_y = next_ref.y - entry_gate.y;
+      const double dir_z = next_ref.z - entry_gate.z;
+      const double dir_norm = std::sqrt(dir_x * dir_x + dir_y * dir_y + dir_z * dir_z);
+      if (!entry_gate_released_ &&
+          dir_norm > 1e-6 &&
+          spatialDistance(curr, entry_gate) <= segment_entry_activation_radius_) {
+        const double unit_x = dir_x / dir_norm;
+        const double unit_y = dir_y / dir_norm;
+        const double unit_z = dir_z / dir_norm;
+        const double along_track =
+            (curr.x - entry_gate.x) * unit_x +
+            (curr.y - entry_gate.y) * unit_y +
+            (curr.z - entry_gate.z) * unit_z;
+        const bool reached_entry_gate =
+            spatialDistance(curr, entry_gate) <= std::max(goal_republish_dist_, 0.3);
+        if (reached_entry_gate) {
+          entry_gate_released_ = true;
+        }
+        hold_segment_entry = !reached_entry_gate && along_track < segment_entry_hold_distance_;
+        if (hold_segment_entry) {
+          goal = entry_gate;
+          heading_ref = next_ref;
+        }
+      }
+    }
 
-  quadrotor_msgs::PositionCommand buildTrackCommand(int dense_idx) {
-    const int target_idx = advanceDenseIdxByDistance(dense_idx, track_look_ahead_distance_);
-    RoutePoint target = dense_points_[target_idx];
-    RoutePoint next = dense_points_[std::min(target_idx + 1, static_cast<int>(dense_points_.size()) - 1)];
-
-    double dir_x = next.x - target.x;
-    double dir_y = next.y - target.y;
-    double dir_z = next.z - target.z;
-    const double norm = std::sqrt(dir_x * dir_x + dir_y * dir_y + dir_z * dir_z);
-    if (norm > 1e-6) {
-      dir_x /= norm;
-      dir_y /= norm;
-      dir_z /= norm;
+    if (hold_segment_entry) {
+      use_gate_approach_heading = false;
+    } else if (!dense_points_.empty() && dense_progress_idx_ >= 0) {
+      const RoutePoint& gate = raw_points_[segment.raw_end_idx];
+      const bool approaching_gate = spatialDistance(curr, gate) <= gate_slowdown_distance_;
+      if (approaching_gate) {
+        goal = gate;
+        use_gate_approach_heading = true;
+      } else {
+        const int dense_goal_idx =
+            advanceDenseIdxByDistance(std::max(0, dense_progress_idx_), dp_goal_corridor_lookahead_);
+        const int heading_idx = std::min(dense_goal_idx + 1, segment.dense_end_idx);
+        goal = dense_points_[dense_goal_idx];
+        heading_ref = dense_points_[heading_idx];
+      }
     } else {
-      dir_x = 0.0;
-      dir_y = 0.0;
-      dir_z = 0.0;
+      int goal_idx = std::max(segment.raw_start_idx, raw_idx);
+      const int goal_offset = std::max(goal_anchor_offset_, 0);
+      goal_idx = std::min(goal_idx + goal_offset, segment.raw_end_idx);
+      goal = raw_points_[goal_idx];
+      heading_ref = raw_points_[std::min(goal_idx + 1, segment.raw_end_idx)];
     }
-
-    const RoutePoint& route_end = dense_points_.back();
-    RoutePoint current_point;
-    current_point.x = current_pose_.pose.position.x;
-    current_point.y = current_pose_.pose.position.y;
-    current_point.z = current_pose_.pose.position.z;
-    const double dist_to_end = horizontalDistance(current_point, route_end);
-
-    double speed = track_cruise_speed_;
-    if (track_slow_down_radius_ > 1e-3) {
-      const double ratio = std::min(std::max(dist_to_end / track_slow_down_radius_, 0.0), 1.0);
-      speed = std::max(track_min_speed_, track_cruise_speed_ * ratio);
-    }
-
-    quadrotor_msgs::PositionCommand cmd;
-    cmd.header.stamp = ros::Time::now();
-    cmd.header.frame_id = "world";
-    cmd.position.x = target.x;
-    cmd.position.y = target.y;
-    cmd.position.z = target.z;
-    cmd.velocity.x = speed * dir_x;
-    cmd.velocity.y = speed * dir_y;
-    cmd.velocity.z = std::max(-track_max_climb_speed_,
-                              std::min(track_max_climb_speed_, speed * dir_z * track_z_speed_gain_));
-    cmd.acceleration.x = 0.0;
-    cmd.acceleration.y = 0.0;
-    cmd.acceleration.z = 0.0;
-    cmd.jerk.x = 0.0;
-    cmd.jerk.y = 0.0;
-    cmd.jerk.z = 0.0;
-    cmd.kx = {0.0, 0.0, 0.0};
-    cmd.kv = {0.0, 0.0, 0.0};
-
-    const double dx = target.x - current_pose_.pose.position.x;
-    const double dy = target.y - current_pose_.pose.position.y;
-    const double dist_xy = std::sqrt(dx * dx + dy * dy);
-    cmd.yaw = dist_xy > track_min_dist_threshold_ ? std::atan2(dy, dx) : current_yaw_;
-    cmd.yaw_dot = 0.0;
-    cmd.trajectory_id = 0;
-    cmd.trajectory_flag = FLAG_TRACK;
-    return cmd;
-  }
-
-  geometry_msgs::PoseStamped buildGoalPose(int raw_idx) {
-    const int goal_offset = std::max(goal_anchor_offset_, 0);
-    int goal_idx = std::min(raw_idx + goal_offset,
-                            static_cast<int>(raw_points_.size()) - 1);
-    goal_idx = std::max(0, std::min(goal_idx, static_cast<int>(raw_points_.size()) - 1));
-    const RoutePoint& goal = raw_points_[goal_idx];
-    const RoutePoint& heading_ref = raw_points_[std::min(goal_idx + 1, static_cast<int>(raw_points_.size()) - 1)];
 
     geometry_msgs::PoseStamped pose;
     pose.header.stamp = ros::Time::now();
@@ -503,7 +553,15 @@ class HybridRouteManager {
     pose.pose.position.x = goal.x;
     pose.pose.position.y = goal.y;
     pose.pose.position.z = goal.z;
-    pose.pose.orientation = yawToQuaternion(std::atan2(heading_ref.y - goal.y, heading_ref.x - goal.x));
+    double goal_yaw = 0.0;
+    if (use_gate_approach_heading) {
+      const int prev_idx = std::max(segment.raw_start_idx, segment.raw_end_idx - 1);
+      const RoutePoint& prev = raw_points_[prev_idx];
+      goal_yaw = std::atan2(goal.y - prev.y, goal.x - prev.x);
+    } else {
+      goal_yaw = std::atan2(heading_ref.y - goal.y, heading_ref.x - goal.x);
+    }
+    pose.pose.orientation = yawToQuaternion(goal_yaw);
     return pose;
   }
 
@@ -531,42 +589,85 @@ class HybridRouteManager {
     return spatialDistance(curr, goal_point) <= goal_reached_radius_;
   }
 
+  bool hasPassedGate(const RouteSegment& segment, const RoutePoint& curr) const {
+    if (segment.raw_end_idx <= segment.raw_start_idx) {
+      return false;
+    }
+
+    const RoutePoint& gate = raw_points_[segment.raw_end_idx];
+    if (spatialDistance(curr, gate) > gate_pass_activation_radius_) {
+      return false;
+    }
+
+    const RoutePoint& prev = raw_points_[segment.raw_end_idx - 1];
+    const double dir_x = gate.x - prev.x;
+    const double dir_y = gate.y - prev.y;
+    const double dir_z = gate.z - prev.z;
+    const double dir_norm = std::sqrt(dir_x * dir_x + dir_y * dir_y + dir_z * dir_z);
+    if (dir_norm < 1e-6) {
+      return false;
+    }
+
+    const double unit_x = dir_x / dir_norm;
+    const double unit_y = dir_y / dir_norm;
+    const double unit_z = dir_z / dir_norm;
+
+    const double gate_to_curr_x = curr.x - gate.x;
+    const double gate_to_curr_y = curr.y - gate.y;
+    const double gate_to_curr_z = curr.z - gate.z;
+    const double along_track =
+        gate_to_curr_x * unit_x + gate_to_curr_y * unit_y + gate_to_curr_z * unit_z;
+
+    return along_track >= gate_pass_margin_;
+  }
+
+  void maybeAdvanceSegment() {
+    if (segments_.empty() || active_segment_idx_ + 1 >= static_cast<int>(segments_.size()) || !has_pose_) {
+      return;
+    }
+
+    const RouteSegment& segment = activeSegment();
+    const RoutePoint& gate = raw_points_[segment.raw_end_idx];
+
+    RoutePoint curr;
+    curr.x = current_pose_.pose.position.x;
+    curr.y = current_pose_.pose.position.y;
+    curr.z = current_pose_.pose.position.z;
+
+    const bool reached_gate = spatialDistance(curr, gate) <= segment_switch_radius_;
+    const bool passed_gate = hasPassedGate(segment, curr);
+    if (!(reached_gate || passed_gate)) {
+      return;
+    }
+
+    ++active_segment_idx_;
+    const RouteSegment& next_segment = activeSegment();
+    raw_progress_idx_ = std::max(raw_progress_idx_, next_segment.raw_start_idx);
+    dense_progress_idx_ = std::max(dense_progress_idx_, next_segment.dense_start_idx);
+    has_last_goal_ = false;
+    entry_gate_released_ = false;
+
+    ROS_INFO("HybridRouteManager advanced to segment %d/%zu gate_raw=%d next_raw=[%d,%d] reached_gate=%s passed_gate=%s",
+             active_segment_idx_ + 1, segments_.size(), segment.raw_end_idx,
+             next_segment.raw_start_idx, next_segment.raw_end_idx,
+             reached_gate ? "true" : "false",
+             passed_gate ? "true" : "false");
+  }
+
   void controlLoop(const ros::TimerEvent&) {
     if (!has_pose_) {
       return;
     }
-
-    const int dense_idx = findNearestDenseIdx();
-    const int raw_idx = findNearestRawIdx();
-    if (dense_idx < 0 || raw_idx < 0) {
-      return;
-    }
-
-    const geometry_msgs::PoseStamped goal = buildGoalPose(raw_idx);
-    const bool goal_published = shouldPublishGoal(goal);
-    if (goal_published) {
-      goal_pub_.publish(goal);
-      last_goal_ = goal;
-      has_last_goal_ = true;
-    }
-
-    quadrotor_msgs::PositionCommand cmd = buildTrackCommand(dense_idx);
-    last_track_cmd_ = cmd;
-    has_last_track_cmd_ = true;
-    cmd_pub_.publish(cmd);
-    ROS_INFO_THROTTLE(0.5,
-                      "HybridRoute TRACK dense=%d raw=%d goal_pub=%s target=(%.2f,%.2f,%.2f) vel=(%.2f,%.2f,%.2f)",
-                      dense_idx, raw_idx, goal_published ? "YES" : "NO",
-                      cmd.position.x, cmd.position.y, cmd.position.z,
-                      cmd.velocity.x, cmd.velocity.y, cmd.velocity.z);
+    const bool stale_goal =
+        !last_goal_publish_time_.isValid() ||
+        (ros::Time::now() - last_goal_publish_time_).toSec() > forced_goal_refresh_sec_;
+    publishGoalIfPossible(stale_goal, stale_goal ? "timer_force" : "timer");
   }
 
   ros::NodeHandle nh_;
   ros::NodeHandle pnh_;
 
   ros::Subscriber pose_sub_;
-  ros::Subscriber dp_cmd_sub_;
-  ros::Publisher cmd_pub_;
   ros::Publisher goal_pub_;
   ros::Publisher state_pub_;
   ros::Publisher dense_path_pub_;
@@ -574,8 +675,6 @@ class HybridRouteManager {
   ros::Timer timer_;
 
   std::string pose_topic_;
-  std::string dp_cmd_topic_;
-  std::string output_cmd_topic_;
   std::string goal_topic_;
   std::string state_topic_;
   std::string dense_path_topic_;
@@ -586,38 +685,39 @@ class HybridRouteManager {
   int dense_progress_search_window_ = 160;
   int raw_progress_search_window_ = 36;
   double progress_z_weight_ = 0.2;
-  double track_look_ahead_distance_ = 4.5;
-  double track_cruise_speed_ = 4.2;
-  double track_slow_down_radius_ = 10.0;
-  double track_min_speed_ = 1.0;
-  double track_min_dist_threshold_ = 0.15;
-  double track_max_climb_speed_ = 3.0;
-  double track_z_speed_gain_ = 2.0;
   double track_publish_rate_ = 50.0;
   int goal_anchor_offset_ = 1;
   double goal_republish_dist_ = 0.5;
   double goal_reached_radius_ = 6.0;
+  double dp_goal_corridor_lookahead_ = 8.0;
+  double gate_slowdown_distance_ = 5.0;
+  double segment_entry_hold_distance_ = 4.0;
+  double segment_entry_activation_radius_ = 12.0;
+  double segment_entry_goal_lookahead_ = 2.0;
+  double duplicate_gate_threshold_ = 0.3;
+  double segment_switch_radius_ = 2.0;
+  double gate_pass_margin_ = 0.3;
+  double gate_pass_activation_radius_ = 12.0;
 
   geometry_msgs::PoseStamped current_pose_;
   bool has_pose_ = false;
-  double current_yaw_ = 0.0;
-  double current_speed_xy_ = 0.0;
-  ros::Time last_pose_stamp_;
-  quadrotor_msgs::PositionCommand latest_dp_cmd_;
-  bool has_dp_cmd_ = false;
-  quadrotor_msgs::PositionCommand last_track_cmd_;
-  bool has_last_track_cmd_ = false;
   geometry_msgs::PoseStamped last_goal_;
   bool has_last_goal_ = false;
+  bool boot_goal_published_ = false;
+  ros::Time last_goal_publish_time_;
   std::vector<RoutePoint> raw_points_;
   std::vector<RoutePoint> dense_points_;
   std::vector<int> raw_to_dense_idx_;
+  std::vector<RouteSegment> segments_;
   nav_msgs::Path dense_path_msg_;
   nav_msgs::Path anchor_path_msg_;
 
   int dense_progress_idx_ = -1;
   int raw_progress_idx_ = -1;
-  State state_ = State::kTrackRoute;
+  int active_segment_idx_ = 0;
+  bool entry_gate_released_ = false;
+  double forced_goal_refresh_sec_ = 0.5;
+  State state_ = State::kDpPlanner;
 };
 
 int main(int argc, char** argv) {

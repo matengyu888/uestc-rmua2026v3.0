@@ -1,0 +1,9 @@
+build/
+devel/
+logs/
+.vscode/
+*.tar
+*.tar.gz
+*.sha256
+__pycache__/
+src/**/__pycache__/

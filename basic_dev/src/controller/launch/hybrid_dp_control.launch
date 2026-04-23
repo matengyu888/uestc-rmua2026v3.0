@@ -6,19 +6,16 @@
     <node pkg="planner" type="hybrid_route_manager_node" name="hybrid_route_manager" output="screen">
         <param name="csv_path" value="$(find sim_tools)/path/rule_based_strict_route_anchors.csv"/>
         <param name="pose_topic" value="/airsim_node/drone_1/debug/pose_gt"/>
-        <param name="dp_cmd_topic" value="/dp_planner/position_cmd"/>
-        <param name="output_cmd_topic" value="/position_cmd"/>
         <param name="goal_topic" value="/goal_pose"/>
         <param name="goal_anchor_offset" value="2"/>
         <param name="goal_reached_radius" value="8.0"/>
         <param name="goal_republish_dist" value="0.5"/>
         <param name="route_spacing" value="0.5"/>
-        <param name="track_look_ahead_distance" value="4.5"/>
-        <param name="track_cruise_speed" value="18.0"/>
-        <param name="track_slow_down_radius" value="18.0"/>
-        <param name="track_min_speed" value="8.5"/>
-        <param name="track_max_climb_speed" value="2.5"/>
-        <param name="track_z_speed_gain" value="1.2"/>
+        <param name="dp_goal_corridor_lookahead" value="12.0"/>
+        <param name="gate_slowdown_distance" value="5.0"/>
+        <param name="segment_entry_hold_distance" value="4.0"/>
+        <param name="segment_entry_activation_radius" value="12.0"/>
+        <param name="segment_entry_goal_lookahead" value="2.0"/>
     </node>
 
     <node pkg="planner" type="stereo_depth_node" name="stereo_depth_node" output="screen">
@@ -55,7 +52,7 @@
     </node>
 
     <include file="$(find planner)/launch/dp_planner.launch">
-        <arg name="cmd_topic" value="/dp_planner/position_cmd"/>
+        <arg name="cmd_topic" value="/position_cmd"/>
         <arg name="depth_topic" value="/airsim_node/drone_1/front_stereo/DepthPerspective"/>
     </include>
 </launch>
