@@ -21,5 +21,10 @@
         <param name="turn_min_speed_scale" value="0.45"/>
         <param name="reverse_turn_speed_scale" value="0.60"/>
         <param name="yaw_slew_rate" value="0.55"/>
+        <param name="use_network_velocity" value="true"/>
+        <param name="network_velocity_blend" value="0.85"/>
+        <param name="network_velocity_min_goal_scale" value="0.25"/>
+        <param name="network_velocity_max_speed" value="16.0"/>
+        <param name="network_velocity_max_speed_z" value="2.5"/>
     </node>
 </launch>

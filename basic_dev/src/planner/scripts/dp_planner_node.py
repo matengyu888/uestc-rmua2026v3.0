@@ -44,6 +44,11 @@ class DPPlanner:
         self.turn_min_speed_scale = rospy.get_param("~turn_min_speed_scale", 0.45)
         self.reverse_turn_speed_scale = rospy.get_param("~reverse_turn_speed_scale", 0.60)
         self.yaw_slew_rate = rospy.get_param("~yaw_slew_rate", 0.55)
+        self.use_network_velocity = rospy.get_param("~use_network_velocity", True)
+        self.network_velocity_blend = rospy.get_param("~network_velocity_blend", 0.85)
+        self.network_velocity_min_goal_scale = rospy.get_param("~network_velocity_min_goal_scale", 0.25)
+        self.network_velocity_max_speed = rospy.get_param("~network_velocity_max_speed", self.max_speed)
+        self.network_velocity_max_speed_z = rospy.get_param("~network_velocity_max_speed_z", self.max_speed_z)
 
         self.odom_topic = rospy.get_param("~odom_topic", "/airsim_node/drone_1/debug/pose_gt")
         self.odom_type = rospy.get_param("~odom_type", "pose")
@@ -103,7 +108,10 @@ class DPPlanner:
         rospy.loginfo("DP-Planner 已加载。model=%s", self.model_path)
         rospy.loginfo("odom_topic=%s (%s), depth_topic=%s, goal_topic=%s, cmd_topic=%s",
                       self.odom_topic, self.odom_type, self.depth_topic, self.goal_topic, self.cmd_topic)
-        rospy.logwarn("当前控制器只能直接利用 PositionCommand 的 position/velocity/yaw，acceleration 暂未直接用于速度内环。")
+        rospy.loginfo(
+            "当前控制链路将网络速度写入 PositionCommand.velocity，并用该速度生成 position 前视点；"
+            "acceleration 仍仅作为附带输出。"
+        )
 
     def publish_debug_depth_images(self, depth_resized, feature_tensor):
         if not self.publish_debug_depth or self.debug_depth_resized_pub is None:
@@ -180,6 +188,17 @@ class DPPlanner:
     @staticmethod
     def normalize_angle(angle):
         return math.atan2(math.sin(angle), math.cos(angle))
+
+    @staticmethod
+    def limit_velocity_components(vel, max_speed_xy, max_speed_z):
+        out = np.array(vel, dtype=np.float32, copy=True)
+        max_speed_xy = max(0.0, float(max_speed_xy))
+        max_speed_z = max(0.0, float(max_speed_z))
+        xy_norm = float(np.linalg.norm(out[:2]))
+        if xy_norm > max_speed_xy and xy_norm > 1e-6:
+            out[:2] *= max_speed_xy / xy_norm
+        out[2] = float(np.clip(out[2], -max_speed_z, max_speed_z))
+        return out
 
     def get_reference_rotation(self):
         q = self.curr_q
@@ -313,7 +332,7 @@ class DPPlanner:
                 diff = self.target_pos - self.curr_pos
                 dist = np.linalg.norm(diff)
                 target_v_world = (diff / dist) * min(dist, self.max_speed) if dist > 0.1 else np.zeros(3, dtype=np.float32)
-                target_v_world[2] = float(np.clip(target_v_world[2], -self.max_speed_z, self.max_speed_z))
+                target_v_world = self.limit_velocity_components(target_v_world, self.max_speed, self.max_speed_z)
                 path_yaw = self.curr_yaw
                 target_v_xy_norm = np.linalg.norm(target_v_world[:2])
                 if target_v_xy_norm > 1e-3:
@@ -335,22 +354,13 @@ class DPPlanner:
                     min_scale = self.reverse_turn_speed_scale if use_reverse_heading else self.turn_min_speed_scale
                     speed_scale = 1.0 - (1.0 - min_scale) * blend
                     target_v_world *= speed_scale
+                    target_v_world = self.limit_velocity_components(target_v_world, self.max_speed, self.max_speed_z)
 
                 cmd_now = rospy.Time.now()
                 if self.last_cmd_time is None:
                     dt_cmd = 1.0 / 15.0
                 else:
                     dt_cmd = max((cmd_now - self.last_cmd_time).to_sec(), 1e-3)
-                if self.last_cmd_yaw is None:
-                    desired_yaw = desired_yaw_target
-                else:
-                    yaw_step = self.normalize_angle(desired_yaw_target - self.last_cmd_yaw)
-                    max_step = max(self.yaw_slew_rate * dt_cmd, 1e-3)
-                    yaw_step = float(np.clip(yaw_step, -max_step, max_step))
-                    desired_yaw = self.normalize_angle(self.last_cmd_yaw + yaw_step)
-
-                self.last_cmd_yaw = desired_yaw
-                self.last_cmd_time = cmd_now
 
                 target_v_local = torch.from_numpy(target_v_world).float().to(self.device) @ R_ref
                 local_v = torch.from_numpy(self.curr_vel).float().to(self.device) @ R_ref
@@ -365,20 +375,49 @@ class DPPlanner:
                 v_pred_world = act_world[0, :, 1]
                 acc_cmd_world = (a_pred_world - v_pred_world - self.g_std.to(self.device)) * self.thr_est_error \
                                 + self.g_std.to(self.device)
+                net_v_world = v_pred_world.detach().cpu().numpy().astype(np.float32)
+                net_v_world = self.limit_velocity_components(
+                    net_v_world,
+                    self.network_velocity_max_speed,
+                    self.network_velocity_max_speed_z,
+                )
+
+                blend = float(np.clip(self.network_velocity_blend, 0.0, 1.0))
+                cmd_v_world = target_v_world.copy()
+                if self.use_network_velocity:
+                    cmd_v_world = (1.0 - blend) * target_v_world + blend * net_v_world
+                    if dist > 0.1:
+                        goal_dir = diff / dist
+                        min_goal_speed = min(dist, self.max_speed) * speed_scale * max(
+                            0.0, float(self.network_velocity_min_goal_scale)
+                        )
+                        goal_progress = float(np.dot(cmd_v_world, goal_dir))
+                        if goal_progress < min_goal_speed:
+                            cmd_v_world += (min_goal_speed - goal_progress) * goal_dir
+                cmd_v_world = self.limit_velocity_components(
+                    cmd_v_world,
+                    self.max_speed,
+                    self.max_speed_z,
+                )
+
+                cmd_path_yaw = path_yaw
+                cmd_v_xy_norm = np.linalg.norm(cmd_v_world[:2])
+                if cmd_v_xy_norm > 1e-3:
+                    cmd_path_yaw = self.normalize_angle(math.atan2(cmd_v_world[1], cmd_v_world[0]))
 
                 cmd = PositionCommand()
                 cmd.header.stamp = cmd_now
                 cmd.header.frame_id = "world"
-                cmd.velocity.x = target_v_world[0]
-                cmd.velocity.y = target_v_world[1]
-                cmd.velocity.z = target_v_world[2]
+                cmd.velocity.x = cmd_v_world[0]
+                cmd.velocity.y = cmd_v_world[1]
+                cmd.velocity.z = cmd_v_world[2]
 
                 horizon_xy = max(0.1, float(self.cmd_pos_horizon_sec))
                 horizon_z = max(0.1, float(self.cmd_pos_horizon_z_sec))
                 pos_ref = self.curr_pos.copy()
-                pos_ref[0] += target_v_world[0] * horizon_xy
-                pos_ref[1] += target_v_world[1] * horizon_xy
-                pos_ref[2] += target_v_world[2] * horizon_z
+                pos_ref[0] += cmd_v_world[0] * horizon_xy
+                pos_ref[1] += cmd_v_world[1] * horizon_xy
+                pos_ref[2] += cmd_v_world[2] * horizon_z
                 if np.linalg.norm(self.target_pos - self.curr_pos) <= np.linalg.norm(pos_ref - self.curr_pos):
                     pos_ref = self.target_pos.copy()
 
@@ -391,6 +430,19 @@ class DPPlanner:
                 cmd.jerk.x = 0.0
                 cmd.jerk.y = 0.0
                 cmd.jerk.z = 0.0
+                yaw_target = cmd_path_yaw if self.use_network_velocity else desired_yaw
+                desired_yaw_target = yaw_target if cmd_v_xy_norm > 1e-3 else desired_yaw_target
+                if self.last_cmd_yaw is None:
+                    desired_yaw = desired_yaw_target
+                else:
+                    yaw_step = self.normalize_angle(desired_yaw_target - self.last_cmd_yaw)
+                    max_step = max(self.yaw_slew_rate * dt_cmd, 1e-3)
+                    yaw_step = float(np.clip(yaw_step, -max_step, max_step))
+                    desired_yaw = self.normalize_angle(self.last_cmd_yaw + yaw_step)
+
+                self.last_cmd_yaw = desired_yaw
+                self.last_cmd_time = cmd_now
+
                 cmd.yaw = desired_yaw
                 cmd.yaw_dot = 0.0
                 cmd.kx = [2.0, 2.0, 2.5]
@@ -400,12 +452,15 @@ class DPPlanner:
 
                 rospy.loginfo_throttle(
                     0.5,
-                    "DP cmd | goal_dist=%.2f vel=[%.2f %.2f %.2f] acc=[%.2f %.2f %.2f] yaw=%.2f reverse=%s speed_scale=%.2f",
+                    "DP cmd | goal_dist=%.2f path_vel=[%.2f %.2f %.2f] net_vel=[%.2f %.2f %.2f] cmd_vel=[%.2f %.2f %.2f] acc=[%.2f %.2f %.2f] yaw=%.2f reverse=%s blend=%.2f speed_scale=%.2f",
                     goal_dist,
+                    target_v_world[0], target_v_world[1], target_v_world[2],
+                    net_v_world[0], net_v_world[1], net_v_world[2],
                     cmd.velocity.x, cmd.velocity.y, cmd.velocity.z,
                     cmd.acceleration.x, cmd.acceleration.y, cmd.acceleration.z,
                     cmd.yaw,
                     "true" if use_reverse_heading else "false",
+                    blend if self.use_network_velocity else 0.0,
                     speed_scale,
                 )
         except Exception as exc:
