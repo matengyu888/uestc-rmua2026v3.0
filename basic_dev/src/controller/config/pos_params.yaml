@@ -23,6 +23,11 @@ yaw_kp_rotate: 0.45
 yaw_rate_cmd_scale: 57.29577951308232
 startup_profile_hold_dist: 0.0
 startup_profile_blend_dist: 1.5
+acc_ff_gain_xy: 12.0
+acc_ff_gain_z: 8.0
+max_acc_ff_xy: 4.0
+max_acc_ff_z: 1.5
+max_acc_ff_total: 4.5
 
 # 起步阶段控制器小参数，飞出一段距离后按距离平滑恢复上面的正常参数
 startup_kp_xy: 2.6

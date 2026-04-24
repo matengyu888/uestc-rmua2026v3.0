@@ -103,7 +103,10 @@ class DPPlanner:
         rospy.loginfo("DP-Planner 已加载。model=%s", self.model_path)
         rospy.loginfo("odom_topic=%s (%s), depth_topic=%s, goal_topic=%s, cmd_topic=%s",
                       self.odom_topic, self.odom_type, self.depth_topic, self.goal_topic, self.cmd_topic)
-        rospy.logwarn("当前控制器只能直接利用 PositionCommand 的 position/velocity/yaw，acceleration 暂未直接用于速度内环。")
+        rospy.loginfo(
+            "当前控制链路会使用 PositionCommand 的 position/velocity/yaw，"
+            "并将 acceleration 作为受限速度前馈接入位置控制器。"
+        )
 
     def publish_debug_depth_images(self, depth_resized, feature_tensor):
         if not self.publish_debug_depth or self.debug_depth_resized_pub is None:

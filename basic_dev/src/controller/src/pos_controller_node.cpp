@@ -106,6 +106,25 @@ private:
         y *= scale;
     }
 
+    static void clampVectorNorm3(double& x, double& y, double& z, double limit) {
+        if (limit <= 1e-6) {
+            x = 0.0;
+            y = 0.0;
+            z = 0.0;
+            return;
+        }
+
+        const double norm = std::sqrt(x * x + y * y + z * z);
+        if (norm <= limit) {
+            return;
+        }
+
+        const double scale = limit / norm;
+        x *= scale;
+        y *= scale;
+        z *= scale;
+    }
+
     static double normalizeAngle(double angle) {
         while (angle > M_PI) angle -= 2.0 * M_PI;
         while (angle < -M_PI) angle += 2.0 * M_PI;
@@ -161,6 +180,11 @@ private:
         yaw_rate_cmd_scale = nh.param("yaw_rate_cmd_scale", 57.29577951308232);
         startup_profile_hold_dist = nh.param("startup_profile_hold_dist", 40.0);
         startup_profile_blend_dist = nh.param("startup_profile_blend_dist", 30.0);
+        acc_ff_gain_xy = nh.param("acc_ff_gain_xy", 0.0);
+        acc_ff_gain_z = nh.param("acc_ff_gain_z", 0.0);
+        max_acc_ff_xy = nh.param("max_acc_ff_xy", 0.0);
+        max_acc_ff_z = nh.param("max_acc_ff_z", 0.0);
+        max_acc_ff_total = nh.param("max_acc_ff_total", 0.0);
         // 该仿真里 PositionCommand 和 /uav/state/pose 默认都按 NED 提供。
         // 控制器内部统一把 z 转成 z-up，再直接发送给 VelCmd.vz。
         pos_cmd_z_sign = nh.param("position_cmd_z_sign", -1.0);
@@ -237,9 +261,31 @@ private:
         //                   err_x, err_y, err_z, target_z, curr_z);
 
         // 1. 世界系下的位置 PID
-        double v_w_x = pid_x.compute(target_x, curr_x, dt);
-        double v_w_y = pid_y.compute(target_y, curr_y, dt);
-        double v_w_z = pid_z.compute(target_z, curr_z, dt);
+        double v_pid_x = pid_x.compute(target_x, curr_x, dt);
+        double v_pid_y = pid_y.compute(target_y, curr_y, dt);
+        double v_pid_z = pid_z.compute(target_z, curr_z, dt);
+
+        v_pid_x = clampWithLimit(v_pid_x, pid_x.max_out);
+        v_pid_y = clampWithLimit(v_pid_y, pid_y.max_out);
+        v_pid_z = clampWithLimit(v_pid_z, pid_z.max_out);
+
+        // Consume planner acceleration as a bounded velocity feedforward so the
+        // DP network can bias the translational command without replacing the
+        // existing position loop.
+        double acc_ff_x = target_pos.acceleration.x;
+        double acc_ff_y = target_pos.acceleration.y;
+        double acc_ff_z = pos_cmd_z_sign * target_pos.acceleration.z;
+        clampVectorNorm(acc_ff_x, acc_ff_y, max_acc_ff_xy);
+        acc_ff_z = clampWithLimit(acc_ff_z, max_acc_ff_z);
+        clampVectorNorm3(acc_ff_x, acc_ff_y, acc_ff_z, max_acc_ff_total);
+
+        const double v_ff_x = acc_ff_gain_xy * acc_ff_x * dt;
+        const double v_ff_y = acc_ff_gain_xy * acc_ff_y * dt;
+        const double v_ff_z = acc_ff_gain_z * acc_ff_z * dt;
+
+        double v_w_x = v_pid_x + v_ff_x;
+        double v_w_y = v_pid_y + v_ff_y;
+        double v_w_z = v_pid_z + v_ff_z;
 
         v_w_x = clampWithLimit(v_w_x, pid_x.max_out);
         v_w_y = clampWithLimit(v_w_y, pid_y.max_out);
@@ -262,9 +308,13 @@ private:
         }
 
         ROS_INFO_THROTTLE(0.5,
-                          "PosController mode=%s target_z=%.2f curr_z=%.2f err_z=%.2f vel_cmd=(%.2f,%.2f,%.2f) vel_cap=(%.2f,%.2f) yaw=%.2f yaw_dot=%.2f",
+                          "PosController mode=%s target_z=%.2f curr_z=%.2f err_z=%.2f vel_pid=(%.2f,%.2f,%.2f) vel_ff=(%.2f,%.2f,%.2f) vel_cmd=(%.2f,%.2f,%.2f) acc_ff=(%.2f,%.2f,%.2f) vel_cap=(%.2f,%.2f) yaw=%.2f yaw_dot=%.2f",
                           modeName(target_pos.trajectory_flag), target_z, curr_z, err_z,
-                          v_w_x, v_w_y, v_w_z, vel_cap_xy, planner_vz_ref,
+                          v_pid_x, v_pid_y, v_pid_z,
+                          v_ff_x, v_ff_y, v_ff_z,
+                          v_w_x, v_w_y, v_w_z,
+                          acc_ff_x, acc_ff_y, acc_ff_z,
+                          vel_cap_xy, planner_vz_ref,
                           target_pos.yaw, target_pos.yaw_dot);
 
         // 2. 坐标变换 World -> Body
@@ -380,6 +430,11 @@ private:
     double yaw_rate_cmd_scale = 57.29577951308232;
     double startup_profile_hold_dist = 40.0;
     double startup_profile_blend_dist = 30.0;
+    double acc_ff_gain_xy = 0.0;
+    double acc_ff_gain_z = 0.0;
+    double max_acc_ff_xy = 0.0;
+    double max_acc_ff_z = 0.0;
+    double max_acc_ff_total = 0.0;
     double pos_cmd_z_sign = 1.0;
     double pose_z_sign = -1.0;
     ros::Time last_cmd_time;

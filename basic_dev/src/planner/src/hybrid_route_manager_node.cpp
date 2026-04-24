@@ -142,6 +142,9 @@ class HybridRouteManager {
     segment_entry_hold_distance_ = pnh_.param("segment_entry_hold_distance", 4.0);
     segment_entry_activation_radius_ = pnh_.param("segment_entry_activation_radius", 12.0);
     segment_entry_goal_lookahead_ = pnh_.param("segment_entry_goal_lookahead", 2.0);
+    virtual_entry_gate_offset_ = pnh_.param("virtual_entry_gate_offset", 4.0);
+    post_switch_release_distance_ = pnh_.param("post_switch_release_distance", 10.0);
+    post_switch_goal_cap_lookahead_ = pnh_.param("post_switch_goal_cap_lookahead", 3.0);
     duplicate_gate_threshold_ = pnh_.param("duplicate_gate_threshold", 0.30);
     segment_switch_radius_ = pnh_.param("segment_switch_radius", 2.0);
     gate_pass_margin_ = pnh_.param("gate_pass_margin", 0.3);
@@ -482,6 +485,25 @@ class HybridRouteManager {
     return target_idx;
   }
 
+  double segmentAlongTrack(const RoutePoint& curr,
+                           const RoutePoint& segment_start,
+                           const RoutePoint& segment_next) const {
+    const double dir_x = segment_next.x - segment_start.x;
+    const double dir_y = segment_next.y - segment_start.y;
+    const double dir_z = segment_next.z - segment_start.z;
+    const double dir_norm = std::sqrt(dir_x * dir_x + dir_y * dir_y + dir_z * dir_z);
+    if (dir_norm < 1e-6) {
+      return 0.0;
+    }
+
+    const double unit_x = dir_x / dir_norm;
+    const double unit_y = dir_y / dir_norm;
+    const double unit_z = dir_z / dir_norm;
+    return (curr.x - segment_start.x) * unit_x +
+           (curr.y - segment_start.y) * unit_y +
+           (curr.z - segment_start.z) * unit_z;
+  }
+
   geometry_msgs::PoseStamped buildGoalPose(int raw_idx) {
     RoutePoint goal;
     RoutePoint heading_ref;
@@ -494,9 +516,18 @@ class HybridRouteManager {
     curr.y = current_pose_.pose.position.y;
     curr.z = current_pose_.pose.position.z;
 
+    double entry_along_track = 0.0;
+    bool entry_along_track_valid = false;
+    const RoutePoint* entry_gate_ptr = nullptr;
+    const RoutePoint* next_ref_ptr = nullptr;
+
     if (active_segment_idx_ > 0 && segment.raw_end_idx > segment.raw_start_idx) {
       const RoutePoint& entry_gate = raw_points_[segment.raw_start_idx];
       const RoutePoint& next_ref = raw_points_[segment.raw_start_idx + 1];
+      entry_gate_ptr = &entry_gate;
+      next_ref_ptr = &next_ref;
+      entry_along_track = segmentAlongTrack(curr, entry_gate, next_ref);
+      entry_along_track_valid = true;
       const double dir_x = next_ref.x - entry_gate.x;
       const double dir_y = next_ref.y - entry_gate.y;
       const double dir_z = next_ref.z - entry_gate.z;
@@ -504,21 +535,21 @@ class HybridRouteManager {
       if (!entry_gate_released_ &&
           dir_norm > 1e-6 &&
           spatialDistance(curr, entry_gate) <= segment_entry_activation_radius_) {
-        const double unit_x = dir_x / dir_norm;
-        const double unit_y = dir_y / dir_norm;
-        const double unit_z = dir_z / dir_norm;
-        const double along_track =
-            (curr.x - entry_gate.x) * unit_x +
-            (curr.y - entry_gate.y) * unit_y +
-            (curr.z - entry_gate.z) * unit_z;
+        RoutePoint virtual_entry_gate = entry_gate;
+        const double virtual_offset = std::max(0.0, virtual_entry_gate_offset_);
+        virtual_entry_gate.x = entry_gate.x - (dir_x / dir_norm) * virtual_offset;
+        virtual_entry_gate.y = entry_gate.y - (dir_y / dir_norm) * virtual_offset;
         const bool reached_entry_gate =
-            spatialDistance(curr, entry_gate) <= std::max(goal_republish_dist_, 0.3);
+            spatialDistance(curr, virtual_entry_gate) <= std::max(goal_republish_dist_, 0.5);
         if (reached_entry_gate) {
           entry_gate_released_ = true;
         }
-        hold_segment_entry = !reached_entry_gate && along_track < segment_entry_hold_distance_;
+        hold_segment_entry = !reached_entry_gate && entry_along_track < segment_entry_hold_distance_;
         if (hold_segment_entry) {
-          goal = entry_gate;
+          goal = virtual_entry_gate;
+          goal.z = entry_gate.z;
+          goal.segment = entry_gate.segment;
+          goal.global_order = entry_gate.global_order;
           heading_ref = next_ref;
         }
       }
@@ -533,8 +564,29 @@ class HybridRouteManager {
         goal = gate;
         use_gate_approach_heading = true;
       } else {
-        const int dense_goal_idx =
+        int dense_goal_idx =
             advanceDenseIdxByDistance(std::max(0, dense_progress_idx_), dp_goal_corridor_lookahead_);
+        if (post_switch_goal_clamp_active_ &&
+            post_switch_segment_idx_ == active_segment_idx_ &&
+            entry_along_track_valid &&
+            entry_gate_ptr != nullptr &&
+            next_ref_ptr != nullptr) {
+          if (entry_along_track >= post_switch_release_distance_) {
+            post_switch_goal_clamp_active_ = false;
+          } else {
+            const double release_progress = std::max(
+                segment_entry_goal_lookahead_,
+                std::min(post_switch_release_distance_,
+                         std::max(0.0, entry_along_track) + segment_entry_goal_lookahead_));
+            const double clamped_lookahead =
+                std::min(post_switch_goal_cap_lookahead_, release_progress);
+            dense_goal_idx = advanceDenseIdxByDistance(segment.dense_start_idx, clamped_lookahead);
+            ROS_INFO_THROTTLE(
+                0.5,
+                "HybridRoute post-switch clamp seg=%d progress=%.2f lookahead=%.2f goal_idx=%d",
+                active_segment_idx_ + 1, entry_along_track, clamped_lookahead, dense_goal_idx);
+          }
+        }
         const int heading_idx = std::min(dense_goal_idx + 1, segment.dense_end_idx);
         goal = dense_points_[dense_goal_idx];
         heading_ref = dense_points_[heading_idx];
@@ -646,6 +698,8 @@ class HybridRouteManager {
     dense_progress_idx_ = std::max(dense_progress_idx_, next_segment.dense_start_idx);
     has_last_goal_ = false;
     entry_gate_released_ = false;
+    post_switch_goal_clamp_active_ = true;
+    post_switch_segment_idx_ = active_segment_idx_;
 
     ROS_INFO("HybridRouteManager advanced to segment %d/%zu gate_raw=%d next_raw=[%d,%d] reached_gate=%s passed_gate=%s",
              active_segment_idx_ + 1, segments_.size(), segment.raw_end_idx,
@@ -694,6 +748,9 @@ class HybridRouteManager {
   double segment_entry_hold_distance_ = 4.0;
   double segment_entry_activation_radius_ = 12.0;
   double segment_entry_goal_lookahead_ = 2.0;
+  double virtual_entry_gate_offset_ = 4.0;
+  double post_switch_release_distance_ = 10.0;
+  double post_switch_goal_cap_lookahead_ = 3.0;
   double duplicate_gate_threshold_ = 0.3;
   double segment_switch_radius_ = 2.0;
   double gate_pass_margin_ = 0.3;
@@ -716,6 +773,8 @@ class HybridRouteManager {
   int raw_progress_idx_ = -1;
   int active_segment_idx_ = 0;
   bool entry_gate_released_ = false;
+  bool post_switch_goal_clamp_active_ = false;
+  int post_switch_segment_idx_ = -1;
   double forced_goal_refresh_sec_ = 0.5;
   State state_ = State::kDpPlanner;
 };
