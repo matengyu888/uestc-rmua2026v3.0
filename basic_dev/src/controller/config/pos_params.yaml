@@ -33,7 +33,7 @@ startup_kd_z: 0.12
 startup_max_vel_z: 2.5
 
 # 坐标系约定
-# PositionCommand 和 /uav/state/pose 默认都按仿真 NED 处理；
-# 控制器内部统一转成 z-up 后，再发送给 VelCmd.vz（上为正）。
-position_cmd_z_sign: -1.0 
+# /airsim_node/drone_1/debug/pose_gt 仍按仿真 NED 提供，因此需要翻成 z-up。
+# SUPER 输出的 /position_cmd 已经和 /lidar_slam/odom 对齐为 z-up，不能再次翻转。
+position_cmd_z_sign: 1.0
 pose_z_sign: -1.0

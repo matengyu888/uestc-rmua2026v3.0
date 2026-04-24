@@ -1,0 +1,12 @@
+basic_dev/build/
+basic_dev/devel/
+basic_dev/src/planner/scripts/__pycache__/
+tmp/
+verification/logs/
+*.bag
+
+# Local simulator bundle
+simulator12.0.0.3/
+
+# Nested vendor repo metadata should not be tracked by the parent repo
+third_party/SUPER/.git/

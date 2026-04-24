@@ -15,6 +15,7 @@ roslib
 airsim_ros
 message_generation
 nav_msgs
+quadrotor_msgs
 # nodelet
 roscpp
 rospy
@@ -64,7 +65,11 @@ install(PROGRAMS
   scripts/dp_planner_runner.sh
   scripts/dp_planner_node.py
   scripts/local_goal_publisher.py
+  scripts/lidar_filter_bridge.py
   scripts/model.py
+  scripts/pose_to_odom_bridge.py
   scripts/planner_switcher.py
+  scripts/super_planner_compat.py
+  scripts/takeoff_once.py
   DESTINATION ${CATKIN_PACKAGE_BIN_DESTINATION}
 )

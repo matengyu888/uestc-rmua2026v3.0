@@ -1,0 +1,81 @@
+<launch>
+    <arg name="enable_takeoff" default="true"/>
+    <arg name="enable_rviz" default="false"/>
+    <arg name="rviz_config" default="$(find controller)/launch/super_debug.rviz"/>
+
+    <node pkg="sim_tools" type="path_loader.py" name="path_loader" output="screen">
+        <param name="csv_path" value="../path/rule_based_strict_route_anchors.csv"/>
+        <param name="path_mode" value="anchor_interp"/>
+        <param name="smoothing" value="0.18"/>
+        <param name="num_points" value="12000"/>
+        <param name="min_spacing" value="0.05"/>
+        <param name="resample_spacing" value="0.35"/>
+        <param name="min_curve_spacing" value="0.15"/>
+        <param name="curvature_gain" value="2.0"/>
+        <param name="spike_jump" value="4.0"/>
+        <param name="reconnect_dist" value="1.0"/>
+        <param name="corner_gain" value="0.8"/>
+        <param name="z_smooth_window" value="7"/>
+        <param name="max_z_slope" value="0.25"/>
+    </node>
+
+    <node pkg="planner" type="pose_to_odom_bridge.py" name="pose_to_odom_bridge" output="screen">
+        <param name="pose_topic" value="/airsim_node/drone_1/debug/pose_gt"/>
+        <param name="odom_topic" value="/lidar_slam/odom"/>
+        <param name="frame_id" value="world"/>
+        <param name="child_frame_id" value="drone"/>
+        <param name="z_sign" value="-1.0"/>
+    </node>
+
+    <node pkg="planner" type="local_goal_publisher.py" name="local_goal_publisher" output="screen">
+        <param name="path_topic" value="/drone_1/saved_path"/>
+        <param name="pose_topic" value="/airsim_node/drone_1/debug/pose_gt"/>
+        <param name="goal_topic" value="/goal_pose"/>
+        <param name="look_ahead_distance" value="3.5"/>
+        <param name="min_look_ahead_distance" value="2.2"/>
+        <param name="max_look_ahead_distance" value="5.5"/>
+        <param name="look_ahead_expand_start_idx" value="20"/>
+        <param name="look_ahead_expand_end_idx" value="180"/>
+        <param name="forward_search_window" value="50"/>
+        <param name="backward_search_window" value="80"/>
+        <param name="relocalize_forward_window" value="220"/>
+        <param name="max_forward_jump" value="1000000"/>
+        <param name="publish_rate" value="10.0"/>
+        <param name="goal_republish_dist" value="0.3"/>
+        <param name="max_republish_interval" value="0.5"/>
+        <param name="goal_z_sign" value="-1.0"/>
+        <param name="pose_z_sign" value="-1.0"/>
+        <param name="relocalize_dist" value="1.2"/>
+        <param name="global_relocalize" value="false"/>
+        <param name="max_backward_jump" value="1000000"/>
+        <param name="look_ahead_shrink_dist" value="0.8"/>
+        <param name="look_ahead_shrink_z_dist" value="1e9"/>
+        <param name="max_goal_z" value="20.0"/>
+        <param name="max_goal_z_step_up" value="1e9"/>
+        <param name="max_goal_z_step_down" value="1e9"/>
+    </node>
+
+    <node pkg="planner" type="lidar_filter_bridge.py" name="lidar_filter_bridge" output="screen">
+        <param name="input_topic" value="/airsim_node/drone_1/lidar"/>
+        <param name="output_topic" value="/super/lidar_filtered"/>
+        <param name="min_radius" value="1.0"/>
+        <param name="min_z" value="-30.0"/>
+        <param name="max_z" value="20.0"/>
+    </node>
+
+    <node if="$(arg enable_takeoff)" pkg="planner" type="takeoff_once.py" name="takeoff_once" output="screen">
+        <param name="service_name" value="/airsim_node/drone_1/takeoff"/>
+        <param name="wait_on_last_task" value="true"/>
+        <param name="startup_delay" value="1.0"/>
+    </node>
+
+    <node pkg="controller" type="pos_controller_node" name="pos_controller" output="screen">
+        <rosparam command="load" file="$(find controller)/config/pos_params.yaml" />
+    </node>
+
+    <node pkg="super_planner" type="fsm_node" name="super_fsm" output="screen">
+        <param name="config_name" value="rmua_ros1.yaml"/>
+    </node>
+
+    <node if="$(arg enable_rviz)" pkg="rviz" type="rviz" name="super_rviz" args="-d $(arg rviz_config)" output="screen"/>
+</launch>

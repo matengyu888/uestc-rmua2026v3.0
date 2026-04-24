@@ -1,17 +1,28 @@
 <launch>
     <arg name="cmd_topic" default="/dp_planner/position_cmd"/>
     <arg name="depth_topic" default="/airsim_node/drone_1/front_stereo/DepthPerspective"/>
+    <arg name="cloud_topic" default="/airsim_node/drone_1/lidar"/>
 
-    <node pkg="planner" type="dp_planner_runner.sh" name="dp_planner" output="screen">
-        <param name="odom_topic" value="/airsim_node/drone_1/debug/pose_gt"/>
-        <param name="odom_type" value="pose"/>
-        <param name="depth_topic" value="$(arg depth_topic)"/>
+    <node pkg="planner" type="super_planner_compat.py" name="dp_planner" output="screen">
+        <param name="pose_topic" value="/airsim_node/drone_1/debug/pose_gt"/>
+        <param name="cloud_topic" value="$(arg cloud_topic)"/>
         <param name="goal_topic" value="/goal_pose"/>
+        <param name="fallback_goal_topic" value="/airsim_node/end_goal"/>
         <param name="cmd_topic" value="$(arg cmd_topic)"/>
-        <param name="model_path" value="$(find planner)/models/dp_planner/3-19.pth"/>
-        <param name="max_speed" value="10.5"/>
-        <param name="margin" value="0.8"/>
-        <param name="thr_est_error" value="1.0"/>
-        <param name="goal_reached_dist" value="0.4"/>
+        <param name="replan_rate" value="15.0"/>
+        <param name="goal_reached_dist" value="1.2"/>
+        <param name="planning_horizon" value="8.0"/>
+        <param name="safe_radius" value="1.4"/>
+        <param name="clearance_margin" value="0.8"/>
+        <param name="max_speed" value="10.0"/>
+        <param name="min_speed" value="2.5"/>
+        <param name="max_climb_speed" value="2.5"/>
+        <param name="z_p_gain" value="1.2"/>
+        <param name="yaw_spread_deg" value="95.0"/>
+        <param name="heading_samples" value="31"/>
+        <param name="cloud_max_age" value="0.35"/>
+        <param name="goal_align_weight" value="2.5"/>
+        <param name="clearance_weight" value="4.0"/>
+        <param name="sample_stride" value="3"/>
     </node>
 </launch>

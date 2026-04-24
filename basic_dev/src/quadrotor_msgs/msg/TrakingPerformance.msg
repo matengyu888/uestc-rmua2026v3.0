@@ -1,0 +1,10 @@
+std_msgs/Header header
+std_msgs/Int64 fsm_state_id
+std_msgs/String fsm_state
+float64 mpc_solve_time
+float64 suggest_hover_percentage
+
+QuadrotorState reference
+QuadrotorState command
+QuadrotorState feedback
+QuadrotorState error

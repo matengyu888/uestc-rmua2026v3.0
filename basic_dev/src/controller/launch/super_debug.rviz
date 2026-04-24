@@ -1,0 +1,177 @@
+Panels:
+  - Class: rviz/Displays
+    Name: Displays
+    Property Tree Widget:
+      Expanded:
+        - /Global Options1
+      Splitter Ratio: 0.5
+    Tree Height: 720
+  - Class: rviz/Views
+    Name: Views
+  - Class: rviz/Time
+    Name: Time
+Visualization Manager:
+  Class: ""
+  Displays:
+    - Class: rviz/Grid
+      Enabled: true
+      Name: Grid
+      Plane: XY
+      Plane Cell Count: 20
+      Cell Size: 1
+      Color: 160; 160; 164
+      Alpha: 0.5
+      Reference Frame: <Fixed Frame>
+    - Class: rviz/Path
+      Enabled: true
+      Name: Raw Path
+      Topic: /drone_1/raw_path
+      Color: 180; 180; 180
+      Alpha: 0.45
+      Buffer Length: 1
+      Line Style: Lines
+      Line Width: 0.03
+      Pose Style: None
+    - Class: rviz/Path
+      Enabled: true
+      Name: Saved Path
+      Topic: /drone_1/saved_path
+      Color: 0; 220; 255
+      Alpha: 0.9
+      Buffer Length: 1
+      Line Style: Lines
+      Line Width: 0.05
+      Pose Style: None
+    - Class: rviz/Pose
+      Enabled: true
+      Name: Goal Pose
+      Topic: /goal_pose
+      Color: 255; 220; 0
+      Shaft Length: 0.7
+      Head Length: 0.25
+      Head Radius: 0.08
+      Shaft Radius: 0.04
+      Axes Length: 0.5
+      Axes Radius: 0.03
+    - Class: rviz/Pose
+      Enabled: true
+      Name: Ground Truth Pose
+      Topic: /airsim_node/drone_1/debug/pose_gt
+      Color: 255; 80; 80
+      Shaft Length: 0.8
+      Head Length: 0.3
+      Head Radius: 0.08
+      Shaft Radius: 0.04
+      Axes Length: 0.6
+      Axes Radius: 0.03
+    - Class: rviz/Odometry
+      Enabled: true
+      Name: Odom
+      Topic: /lidar_slam/odom
+      Color: 80; 255; 120
+      Alpha: 1
+      Keep: 100
+      Position Tolerance: 0.1
+      Angle Tolerance: 0.1
+      Shape:
+        Alpha: 0.5
+        Axes Length: 0.5
+        Axes Radius: 0.05
+        Color: 255; 25; 0
+        Head Length: 0.3
+        Head Radius: 0.1
+        Shaft Length: 1
+        Shaft Radius: 0.05
+        Value: Arrow
+      Covariance:
+        Position:
+          Alpha: 0.3
+          Color: 204; 51; 204
+          Scale: 1
+          Value: false
+        Orientation:
+          Alpha: 0.5
+          Color: 255; 255; 127
+          Scale: 1
+          Value: false
+        Value: false
+      Twist:
+        Alpha: 1
+        Color: 255; 25; 0
+        Value: false
+    - Class: rviz/PointCloud2
+      Enabled: true
+      Name: Filtered Lidar
+      Topic: /super/lidar_filtered
+      Size (m): 0.08
+      Style: Flat Squares
+      Color Transformer: FlatColor
+      Color: 230; 230; 230
+      Alpha: 0.7
+      Queue Size: 2
+    - Class: rviz/MarkerArray
+      Enabled: true
+      Name: SUPER Goal
+      Marker Topic: /visualization/goal
+      Queue Size: 2
+    - Class: rviz/MarkerArray
+      Enabled: true
+      Name: Frontend Path
+      Marker Topic: /visualization/frontend_path
+      Queue Size: 2
+    - Class: rviz/MarkerArray
+      Enabled: true
+      Name: Exp Traj
+      Marker Topic: /visualization/exp_traj
+      Queue Size: 2
+    - Class: rviz/MarkerArray
+      Enabled: true
+      Name: Backup Traj
+      Marker Topic: /visualization/backup_traj
+      Queue Size: 2
+    - Class: rviz/MarkerArray
+      Enabled: true
+      Name: Committed Traj
+      Marker Topic: /visualization/committed_traj
+      Queue Size: 2
+    - Class: rviz/MarkerArray
+      Enabled: true
+      Name: Exp SFC
+      Marker Topic: /visualization/exp_sfc
+      Queue Size: 2
+    - Class: rviz/MarkerArray
+      Enabled: true
+      Name: Backup SFC
+      Marker Topic: /visualization/backup_sfc
+      Queue Size: 2
+    - Class: rviz/MarkerArray
+      Enabled: true
+      Name: Replan Log
+      Marker Topic: /visualization/replan_log_mkr
+      Queue Size: 2
+  Enabled: true
+  Global Options:
+    Background Color: 40; 40; 45
+    Fixed Frame: world
+    Frame Rate: 30
+  Name: root
+  Tools:
+    - Class: rviz/Interact
+    - Class: rviz/MoveCamera
+    - Class: rviz/Select
+    - Class: rviz/FocusCamera
+    - Class: rviz/Measure
+  Value: true
+  Views:
+    Current:
+      Class: rviz/Orbit
+      Distance: 30
+      Focal Point:
+        X: 12
+        Y: 0
+        Z: 3
+      Pitch: 0.5
+      Yaw: 0.8
+Window Geometry:
+  Height: 960
+  Width: 1680
